@@ -1,0 +1,39 @@
+{
+  "name": "fake-test-project",
+  "version": "1.0.0",
+  "description": "A synthetic Node.js project used as a fixture for npm_shield tests. Contains intentionally suspicious packages alongside benign ones.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest",
+    "build": "webpack --config webpack.config.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "lodash": "^4.17.21",
+    "axios": "^1.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lod4sh": "^4.17.20",
+    "expres": "^4.18.1",
+    "crossenv": "^1.0.0",
+    "event-stream": "3.3.6",
+    "ua-parser-js": "0.7.28",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "moment": "^2.29.4"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "eslint": "^8.53.0",
+    "prettier": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "license": "MIT"
+}
